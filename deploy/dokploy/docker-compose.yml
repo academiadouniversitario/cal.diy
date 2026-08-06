@@ -1,0 +1,78 @@
+# cal.diy API v2 on Dokploy (dev) — pulls the prebuilt GHCR image, never builds on
+# the server (the API build needs 8 GB of heap and would starve the ATS dev app).
+#
+# Dokploy setup:
+#   1. Create a Compose app pointing at this file (repo academiadouniversitario/cal.diy,
+#      branch au-main, path deploy/dokploy/docker-compose.yml).
+#   2. If the GHCR package is private, register a registry credential (PAT with
+#      read:packages) in Dokploy.
+#   3. Set the environment variables below in the panel (see .env.example next to
+#      this file). JWT_SECRET / NEXTAUTH_SECRET / CALENDSO_ENCRYPTION_KEY are
+#      DEV-ONLY values — never reuse the prod ones. CALENDSO_ENCRYPTION_KEY cannot
+#      be rotated later without losing every stored Google connection.
+#   4. Point a domain at the `api` service, port 5555 (Traefik), health path /health.
+#   5. Bootstrap (admin user + ApiKey + google-calendar App + platform Team +
+#      PlatformOAuthClient) is SQL + API against the running stack.
+#
+# Upgrading = push a new au-v* tag on the fork, change CAL_IMAGE_TAG, redeploy.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-calendso}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in Dokploy}
+      POSTGRES_DB: calendso
+    volumes:
+      - cal_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d calendso"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - cal_redis:/data
+
+  migrations:
+    image: ghcr.io/academiadouniversitario/cal.diy-api:${CAL_IMAGE_TAG:-au-v0.1.0}
+    command: ["yarn", "workspace", "@calcom/prisma", "db-deploy"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-calendso}:${POSTGRES_PASSWORD}@postgres:5432/calendso
+      DATABASE_DIRECT_URL: postgresql://${POSTGRES_USER:-calendso}:${POSTGRES_PASSWORD}@postgres:5432/calendso
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: ghcr.io/academiadouniversitario/cal.diy-api:${CAL_IMAGE_TAG:-au-v0.1.0}
+    restart: unless-stopped
+    ports:
+      - "5555"
+    environment:
+      NODE_ENV: production
+      API_PORT: "5555"
+      API_URL: ${CAL_API_URL:?public URL of this API, e.g. https://cal-api.dev...}
+      WEB_APP_URL: ${CAL_API_URL}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-calendso}:${POSTGRES_PASSWORD}@postgres:5432/calendso
+      DATABASE_DIRECT_URL: postgresql://${POSTGRES_USER:-calendso}:${POSTGRES_PASSWORD}@postgres:5432/calendso
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?dev-only secret}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?dev-only secret}
+      CALENDSO_ENCRYPTION_KEY: ${CALENDSO_ENCRYPTION_KEY:?dev-only, NON-ROTATABLE}
+      GOOGLE_API_CREDENTIALS: ${GOOGLE_API_CREDENTIALS:?JSON of the DEV Google OAuth client}
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+
+volumes:
+  cal_pgdata:
+  cal_redis:
