@@ -6,9 +6,16 @@ import handleCancelBooking from "@calcom/features/bookings/lib/handleCancelBooki
 import handleMarkNoShow from "@calcom/features/handleMarkNoShow";
 import { getTranslation } from "@calcom/i18n/server";
 import { symmetricDecrypt, symmetricEncrypt } from "@calcom/lib/crypto";
+import { slugify } from "@calcom/lib/slugify";
+import prisma from "@calcom/prisma";
 import type { Prisma } from "@calcom/prisma/client";
+import type {
+  CreationSource as CreationSourceEnum,
+  MembershipRole as MembershipRoleEnum,
+} from "@calcom/prisma/enums";
 import { credentialForCalendarServiceSelect } from "@calcom/prisma/selects/credential";
 import { paymentDataSelect } from "@calcom/prisma/selects/payment";
+import { randomUUID } from "node:crypto";
 
 export { slugify } from "@calcom/lib/slugify";
 export { slugifyLenient } from "@calcom/lib/slugify-lenient";
@@ -180,8 +187,11 @@ export async function verifyCodeAuthenticated(_args: {
   return false;
 }
 
-// createNewUsersConnectToOrgIfExists removed (EE feature) — stub for API v2
-export async function createNewUsersConnectToOrgIfExists(_args: {
+// createNewUsersConnectToOrgIfExists: minimal community implementation (the EE original was
+// removed with the ee/ tree). Covers the API v2 managed-users path only: creates the user
+// inside the org with an accepted membership and an org profile. Email invitation flows,
+// child-team joins and auto-accept-by-domain from the EE version are NOT implemented.
+export async function createNewUsersConnectToOrgIfExists(args: {
   invitations: { usernameOrEmail: string; role: string }[];
   creationSource?: string;
   teamId: number;
@@ -195,7 +205,58 @@ export async function createNewUsersConnectToOrgIfExists(_args: {
   timeZone?: string;
   language?: string;
 }): Promise<{ id: number; email: string; username: string }[]> {
-  throw new Error("Organization user creation is not available in community edition");
+  const {
+    invitations,
+    teamId,
+    orgConnectInfoByUsernameOrEmail,
+    isPlatformManaged,
+    timeFormat,
+    weekStart,
+    timeZone,
+    language,
+    creationSource,
+  } = args;
+
+  const created: { id: number; email: string; username: string }[] = [];
+  for (const invitation of invitations) {
+    const email = invitation.usernameOrEmail.toLowerCase();
+    const username = slugify(email.split("@")[0]);
+    const autoAccept = orgConnectInfoByUsernameOrEmail[invitation.usernameOrEmail]?.autoAccept ?? true;
+
+    const user = await prisma.user.create({
+      data: {
+        email,
+        username,
+        organizationId: teamId,
+        isPlatformManaged: isPlatformManaged ?? false,
+        invitedTo: teamId,
+        ...(timeZone ? { timeZone } : {}),
+        ...(weekStart ? { weekStart } : {}),
+        ...(timeFormat !== undefined ? { timeFormat } : {}),
+        ...(language ? { locale: language } : {}),
+        verified: true,
+        emailVerified: new Date(),
+        completedOnboarding: true,
+        ...(creationSource ? { creationSource: creationSource as CreationSourceEnum } : {}),
+        teams: {
+          create: {
+            team: { connect: { id: teamId } },
+            role: invitation.role as MembershipRoleEnum,
+            accepted: autoAccept,
+          },
+        },
+        profiles: {
+          create: {
+            uid: randomUUID(),
+            organization: { connect: { id: teamId } },
+            username,
+          },
+        },
+      },
+    });
+    created.push({ id: user.id, email: user.email, username: user.username ?? username });
+  }
+  return created;
 }
 
 // sendVerificationCode removed (EE feature) — stub for API v2

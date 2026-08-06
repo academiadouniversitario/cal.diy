@@ -7,6 +7,8 @@ WORKDIR /calcom
 
 RUN set -eux;
 RUN ln -s /usr/lib/libssl.so.3 /lib/libssl.so.3
+# deasync (native, node-gyp) has no musl/arm64 prebuilt — alpine needs the build toolchain.
+RUN apk add --no-cache python3 make g++
 
 ENV NODE_ENV="production"
 ENV NODE_OPTIONS="--max-old-space-size=8192"
