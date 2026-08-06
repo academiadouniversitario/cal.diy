@@ -32,10 +32,22 @@ WHERE u.email = :admin_email
   AND NOT EXISTS (SELECT 1 FROM "ApiKey" WHERE "hashedKey" = encode(sha256(:api_key_body::bytea), 'hex'));
 
 -- 3. google-calendar App keys. The App catalog is pre-populated by the cal seed, so
---    this is an UPSERT of the credentials — keys is the FLATTENED JSON
---    ({client_id,...}), NOT the Google console download shape ({"web":{...}}).
+--    this is an UPSERT of the credentials. The API requires the FLATTENED shape
+--    ({client_id,...}); the Google console download wraps it in {"web":{...}} —
+--    accept either and flatten here.
 INSERT INTO "App" (slug, "dirName", keys, categories, "updatedAt", enabled)
-VALUES ('google-calendar', 'googlecalendar', :google_credentials::jsonb, '{calendar}', now(), true)
+VALUES (
+  'google-calendar', 'googlecalendar',
+  CASE
+    WHEN :google_credentials::jsonb ? 'web' THEN jsonb_build_object(
+      'client_id', :google_credentials::jsonb->'web'->>'client_id',
+      'client_secret', :google_credentials::jsonb->'web'->>'client_secret',
+      'redirect_uris', :google_credentials::jsonb->'web'->'redirect_uris'
+    )
+    ELSE :google_credentials::jsonb
+  END,
+  '{calendar}', now(), true
+)
 ON CONFLICT (slug) DO UPDATE SET keys = EXCLUDED.keys, enabled = true, "updatedAt" = now();
 
 -- 4. Platform organization (Team) — owner of the OAuth client.
