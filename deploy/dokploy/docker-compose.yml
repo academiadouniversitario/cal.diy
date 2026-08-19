@@ -62,7 +62,14 @@ services:
       WEB_APP_URL: ${CAL_API_URL}
       DATABASE_URL: postgresql://${POSTGRES_USER:-calendso}:${POSTGRES_PASSWORD}@postgres:5432/calendso
       DATABASE_DIRECT_URL: postgresql://${POSTGRES_USER:-calendso}:${POSTGRES_PASSWORD}@postgres:5432/calendso
+      # api v2 reads the DB through dedicated read/write pools (config/app.ts has no
+      # fallback for these) — single-node dev points all of them at the same postgres.
+      DATABASE_READ_URL: postgresql://${POSTGRES_USER:-calendso}:${POSTGRES_PASSWORD}@postgres:5432/calendso
+      DATABASE_WRITE_URL: postgresql://${POSTGRES_USER:-calendso}:${POSTGRES_PASSWORD}@postgres:5432/calendso
       REDIS_URL: redis://redis:6379
+      # Required at boot with no fallback; billing is disabled, any non-empty value works.
+      STRIPE_API_KEY: sk_test_placeholder
+      STRIPE_WEBHOOK_SECRET: whsec_placeholder
       JWT_SECRET: ${JWT_SECRET:?dev-only secret}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?dev-only secret}
       CALENDSO_ENCRYPTION_KEY: ${CALENDSO_ENCRYPTION_KEY:?dev-only, NON-ROTATABLE}
