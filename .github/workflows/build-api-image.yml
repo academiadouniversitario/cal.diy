@@ -30,7 +30,10 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # GHCR_PAT (write:packages, package owner) — the package was created by a
+          # user push, and GitHub's package settings cannot grant a FORK's GITHUB_TOKEN
+          # access to it. Falls back to GITHUB_TOKEN if the secret is ever removed.
+          password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
       - id: meta
         uses: docker/metadata-action@v5
