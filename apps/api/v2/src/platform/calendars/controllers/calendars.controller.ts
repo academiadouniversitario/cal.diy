@@ -219,7 +219,8 @@ export class CalendarsController {
         accessToken: stateParams.get("accessToken"),
         origin: stateParams.get("origin"),
         redir: stateParams.get("redir") || undefined,
-        isDryRun: stateParams.get("isDryRun"),
+        // URLSearchParams.get returns null when absent; the schema expects string | undefined
+        isDryRun: stateParams.get("isDryRun") ?? undefined,
       });
 
       stateObj = parsedState;
