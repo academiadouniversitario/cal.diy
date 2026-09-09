@@ -80,13 +80,18 @@ jobs:
             echo TARGETS
           } >> "$GITHUB_OUTPUT"
 
+      # Version tag ONLY, no `latest`. The prod ECR is IMMUTABLE, so re-pushing a moving
+      # tag fails the NEXT release with ImageTagAlreadyExistsException; metadata-action
+      # cannot scope a tag to one of the images, and nothing consumes `latest` anyway
+      # (dev pins CAL_IMAGE_TAG in the compose, prod pins cal_image_tag in tfvars).
       - id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.targets.outputs.images }}
           tags: |
             type=ref,event=tag
-            type=raw,value=latest,enable={{is_default_branch}}
+          flavor: |
+            latest=false
 
       # One build, both registries: build-push-action pushes every tag metadata-action
       # rendered, so the ECR copy is byte-identical to the GHCR one (same digest).
