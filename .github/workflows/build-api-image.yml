@@ -1,12 +1,16 @@
 name: Build API v2 image
 
-# Builds ONLY the API v2 image (no web app) and pushes it to GHCR so environments
-# pull a pinned image instead of building the monorepo themselves (the build needs
-# 8 GB of heap — see NODE_OPTIONS in apps/api/v2/Dockerfile).
+# Builds ONLY the API v2 image (no web app) and pushes it to GHCR (dev, Dokploy) and —
+# on `au-v*` tags — to the production ECR, so environments pull a pinned image instead
+# of building the monorepo themselves (the build needs 8 GB of heap — see NODE_OPTIONS
+# in apps/api/v2/Dockerfile).
 #
 # DATABASE_URL/DATABASE_DIRECT_URL are baked into the image as ENV by the Dockerfile,
 # so they are passed as PLACEHOLDERS here — never real credentials. The runtime
 # (Dokploy/ECS) overrides them.
+#
+# The image is linux/amd64 ONLY, which is why the prod ECS task definitions are X86_64
+# and not ARM64 like the ATS API (see au-aws/infra/prod/cal-ecs.tf).
 
 on:
   push:
@@ -17,6 +21,16 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write # OIDC → assume the AWS role (no long-lived keys)
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: cal-api
+  # Role created by OpenTofu (au-aws/infra/prod/cal-cicd-oidc.tf). Deterministic ARN.
+  # Its trust policy accepts ONLY `repo:<this>:ref:refs/tags/au-v*`, so a dispatch on a
+  # BRANCH cannot assume it — which is why the AWS steps below are gated on the ref and
+  # a branch run still publishes to GHCR instead of failing.
+  DEPLOY_ROLE_ARN: arn:aws:iam::986281581469:role/ats2-prod-cal-github-deploy
 
 jobs:
   build-amd64:
@@ -35,14 +49,42 @@ jobs:
           # access to it. Falls back to GITHUB_TOKEN if the secret is ever removed.
           password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
+      - name: Configure AWS credentials
+        if: startsWith(github.ref, 'refs/tags/au-v')
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        if: startsWith(github.ref, 'refs/tags/au-v')
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Assembled as a step output instead of inline in `images` so that a SKIPPED ECR
+      # login contributes no line at all — a blank line there would become a bogus
+      # image reference and fail the push.
+      - id: targets
+        run: |
+          {
+            echo 'images<<TARGETS'
+            echo "ghcr.io/${{ github.repository_owner }}/cal.diy-api"
+            if [ -n "${{ steps.ecr.outputs.registry }}" ]; then
+              echo "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}"
+            fi
+            echo TARGETS
+          } >> "$GITHUB_OUTPUT"
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/cal.diy-api
+          images: ${{ steps.targets.outputs.images }}
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable={{is_default_branch}}
 
+      # One build, both registries: build-push-action pushes every tag metadata-action
+      # rendered, so the ECR copy is byte-identical to the GHCR one (same digest).
       - uses: docker/build-push-action@v6
         with:
           context: .
