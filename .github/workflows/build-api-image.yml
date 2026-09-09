@@ -49,8 +49,12 @@ jobs:
           # access to it. Falls back to GITHUB_TOKEN if the secret is ever removed.
           password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
+      # continue-on-error so a credential/trust problem degrades to a GHCR-only publish
+      # instead of losing the image entirely — the first au-v0.1.2 build died here and the
+      # dev registry got nothing either.
       - name: Configure AWS credentials
         if: startsWith(github.ref, 'refs/tags/au-v')
+        continue-on-error: true
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
@@ -59,6 +63,7 @@ jobs:
       - name: Login to Amazon ECR
         id: ecr
         if: startsWith(github.ref, 'refs/tags/au-v')
+        continue-on-error: true
         uses: aws-actions/amazon-ecr-login@v2
 
       # Assembled as a step output instead of inline in `images` so that a SKIPPED ECR
